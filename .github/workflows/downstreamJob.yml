@@ -35,3 +35,75 @@ jobs:
           Write-Host "Doing some downstream work..."
           Start-Sleep -Seconds 5
           Write-Host "Downstream completed."
+
+      # -------------------------------
+      # Get Okta Access Token
+      # -------------------------------
+      - name: Get Okta Access Token
+        shell: pwsh
+        run: |
+          Write-Host "Requesting Okta access token..."
+
+          $body = @{
+              grant_type = "client_credentials"
+              scope = "cicd.qualitygates.read cicd.qualitygates.write tenant.${{ secrets.CICD_TENANT }} project.${{ secrets.CICD_STAR_SYSTEM }}"
+              client_id = "${{ secrets.OKTA_CLIENT_ID }}"
+              client_secret = "${{ secrets.OKTA_CLIENT_SECRET }}"
+          }
+
+          $response = Invoke-RestMethod `
+            -Method Post `
+            -Uri "${{ secrets.OKTA_TOKEN_URL }}" `
+            -ContentType "application/x-www-form-urlencoded" `
+            -Body $body
+
+          $token = $response.access_token
+
+          if (-not $token) {
+              Write-Error "Failed to retrieve Okta token"
+              exit 1
+          }
+
+          Write-Host "Token received successfully"
+
+          "CICD_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # -------------------------------
+      # Close Guidewire Quality Gate
+      # -------------------------------
+      - name: Close Guidewire Quality Gate
+        shell: pwsh
+        run: |
+          Write-Host "Closing Guidewire Quality Gate..."
+
+          $url = "${{ secrets.CICD_BASE_URL }}/api/v3/tenants/${{ secrets.CICD_TENANT }}/starsystems/${{ secrets.CICD_STAR_SYSTEM }}/applications/${{ secrets.CICD_APP }}/quality-gates/${{ secrets.CICD_QUALITY_GATE }}/verifications"
+
+          $headers = @{
+              Authorization = "Bearer $env:CICD_TOKEN"
+              "Content-Type" = "application/json"
+          }
+
+          $body = @{
+              artifact = @{
+                  type = "COMMIT"
+                  id   = "${{ inputs.commit_id }}"
+              }
+              status  = "SUCCESSFUL"
+              url     = "${{ inputs.pr_link }}"
+              comment = "Security scans completed – findings accepted as per CC policy"
+          } | ConvertTo-Json -Depth 5
+
+          try {
+              Invoke-RestMethod `
+                -Method Post `
+                -Uri $url `
+                -Headers $headers `
+                -Body $body
+
+              Write-Host "Quality Gate closed successfully."
+          }
+          catch {
+              Write-Error "Failed to close Quality Gate"
+              Write-Error $_
+              exit 1
+          }
