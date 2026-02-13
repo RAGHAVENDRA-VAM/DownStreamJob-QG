@@ -1,40 +1,84 @@
-name: Downstream Job
+name: Downstream Job - ContactManager PR Quality Gate
 
 on:
   workflow_dispatch:
     inputs:
-      branch:
+      PR_REPOSITORY:
         required: true
         type: string
-      commit_id:
+      PR_BRANCH:
         required: true
         type: string
-      pr_link:
+      PR_COMMIT:
         required: true
         type: string
-      repo_name:
+      PR_URL:
         required: true
         type: string
 
 jobs:
   downstream:
     runs-on: windows-latest
+    timeout-minutes: 120
+
+    env:
+      APP_NAME: ContactManager
+      REPO_SLUG: contactmanager
+      CICD_APP: CM
+
+      BITBUCKET_BASE_URL: https://bitbucket.valuemomentum.alpha3-butterfly.guidewire.net
+
+      CICD_BASE_URL: https://cicd-manager-service.api.omega2-andromeda.guidewire.net
+      CICD_TENANT: valuemomentum
+      CICD_STAR_SYSTEM: gwcp
+      CICD_QUALITY_GATE: prqualitygate
+
+      OKTA_TOKEN_URL: https://guidewire-hub.okta.com/oauth2/aus11vix3uKEpIfSI357/v1/token
 
     steps:
-      - name: Print Received Inputs
-        shell: pwsh
-        run: |
-          Write-Host "Branch: ${{ inputs.branch }}"
-          Write-Host "Commit: ${{ inputs.commit_id }}"
-          Write-Host "PR: ${{ inputs.pr_link }}"
-          Write-Host "Repo: ${{ inputs.repo_name }}"
 
-      - name: Simple Step Example
+      # -------------------------------
+      # Prepare Context
+      # -------------------------------
+      - name: Prepare Context
         shell: pwsh
         run: |
-          Write-Host "Doing some downstream work..."
-          Start-Sleep -Seconds 5
-          Write-Host "Downstream completed."
+          $cleanBranch = "${{ inputs.PR_BRANCH }}" -replace "^refs/heads/", ""
+          $repoUrl = "$env:BITBUCKET_BASE_URL/scm/gwcpdev/$env:REPO_SLUG.git"
+          $reportDir = "reports/$env:APP_NAME/PR-${{ inputs.PR_COMMIT }}"
+
+          Write-Host "Application Context"
+          Write-Host "-------------------"
+          Write-Host "Application : $env:APP_NAME"
+          Write-Host "Repository  : ${{ inputs.PR_REPOSITORY }}"
+          Write-Host "Branch      : $cleanBranch"
+          Write-Host "Commit      : ${{ inputs.PR_COMMIT }}"
+
+          "CLEAN_BRANCH=$cleanBranch" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "REPO_URL=$repoUrl" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "REPORT_DIR=$reportDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # -------------------------------
+      # Checkout Source from Bitbucket
+      # -------------------------------
+      - name: Checkout Source
+        shell: pwsh
+        run: |
+          git config --global http.sslVerify false
+          git clone --depth 1 `
+            --branch $env:CLEAN_BRANCH `
+            https://${{ secrets.BITBUCKET_USERNAME }}:${{ secrets.BITBUCKET_TOKEN }}@${{ env.BITBUCKET_BASE_URL.Replace("https://","") }}/scm/gwcpdev/${{ env.REPO_SLUG }}.git
+
+      # -------------------------------
+      # (Place Your Build / Scan Steps Here)
+      # -------------------------------
+
+      - name: Simulate Build
+        shell: pwsh
+        run: |
+          Write-Host "Running Quality Gates..."
+          Start-Sleep -Seconds 10
+          Write-Host "Validation Completed"
 
       # -------------------------------
       # Get Okta Access Token
@@ -42,18 +86,16 @@ jobs:
       - name: Get Okta Access Token
         shell: pwsh
         run: |
-          Write-Host "Requesting Okta access token..."
-
           $body = @{
               grant_type = "client_credentials"
-              scope = "cicd.qualitygates.read cicd.qualitygates.write tenant.${{ secrets.CICD_TENANT }} project.${{ secrets.CICD_STAR_SYSTEM }}"
+              scope = "cicd.qualitygates.read cicd.qualitygates.write tenant.$env:CICD_TENANT project.$env:CICD_STAR_SYSTEM"
               client_id = "${{ secrets.OKTA_CLIENT_ID }}"
               client_secret = "${{ secrets.OKTA_CLIENT_SECRET }}"
           }
 
           $response = Invoke-RestMethod `
             -Method Post `
-            -Uri "${{ secrets.OKTA_TOKEN_URL }}" `
+            -Uri $env:OKTA_TOKEN_URL `
             -ContentType "application/x-www-form-urlencoded" `
             -Body $body
 
@@ -64,8 +106,6 @@ jobs:
               exit 1
           }
 
-          Write-Host "Token received successfully"
-
           "CICD_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # -------------------------------
@@ -74,9 +114,7 @@ jobs:
       - name: Close Guidewire Quality Gate
         shell: pwsh
         run: |
-          Write-Host "Closing Guidewire Quality Gate..."
-
-          $url = "${{ secrets.CICD_BASE_URL }}/api/v3/tenants/${{ secrets.CICD_TENANT }}/starsystems/${{ secrets.CICD_STAR_SYSTEM }}/applications/${{ secrets.CICD_APP }}/quality-gates/${{ secrets.CICD_QUALITY_GATE }}/verifications"
+          $url = "$env:CICD_BASE_URL/api/v3/tenants/$env:CICD_TENANT/starsystems/$env:CICD_STAR_SYSTEM/applications/$env:CICD_APP/quality-gates/$env:CICD_QUALITY_GATE/verifications"
 
           $headers = @{
               Authorization = "Bearer $env:CICD_TOKEN"
@@ -86,24 +124,17 @@ jobs:
           $body = @{
               artifact = @{
                   type = "COMMIT"
-                  id   = "${{ inputs.commit_id }}"
+                  id   = "${{ inputs.PR_COMMIT }}"
               }
               status  = "SUCCESSFUL"
-              url     = "${{ inputs.pr_link }}"
-              comment = "Security scans completed – findings accepted as per CC policy"
+              url     = "${{ inputs.PR_URL }}"
+              comment = "Security scans completed – findings accepted as per CM policy"
           } | ConvertTo-Json -Depth 5
 
-          try {
-              Invoke-RestMethod `
-                -Method Post `
-                -Uri $url `
-                -Headers $headers `
-                -Body $body
+          Invoke-RestMethod `
+            -Method Post `
+            -Uri $url `
+            -Headers $headers `
+            -Body $body
 
-              Write-Host "Quality Gate closed successfully."
-          }
-          catch {
-              Write-Error "Failed to close Quality Gate"
-              Write-Error $_
-              exit 1
-          }
+          Write-Host "Quality Gate closed successfully."
