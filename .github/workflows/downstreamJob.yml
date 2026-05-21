@@ -491,7 +491,7 @@ jobs:
             comment = $comment
           } | ConvertTo-Json -Depth 5
 
-          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/prqualitygate/verifications"
+          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/prqualitygatedemo/verifications"
 
           Invoke-RestMethod `
             -Method Post `
