@@ -38,7 +38,7 @@ jobs:
       CICD_BASE_URL: https://cicd-manager-service.api.omega2-andromeda.guidewire.net
       CICD_TENANT: valuemomentum
       CICD_STAR_SYSTEM: gwcp
-      CICD_QUALITY_GATE: prqualitygate
+      CICD_QUALITY_GATE: prqualitygatedemo
 
       OKTA_TOKEN_URL: https://guidewire-hub.okta.com/oauth2/aus11vix3uKEpIfSI357/v1/token
 
