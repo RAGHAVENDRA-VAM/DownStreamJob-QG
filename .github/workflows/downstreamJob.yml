@@ -384,7 +384,7 @@ jobs:
             gitleaks-report.json
             changed_files.txt
 
-      # -------------------------------------------------
+     # -------------------------------------------------
       # Get Okta Token
       # -------------------------------------------------
       - name: Get Okta token
@@ -395,35 +395,66 @@ jobs:
           CLIENT_ID: ${{ secrets.OKTA_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.OKTA_CLIENT_SECRET }}
         run: |
-
+      
           Write-Host "Requesting Okta token..."
-
+      
+          # -------------------------------------------------
+          # Build Basic Auth Header
+          # -------------------------------------------------
           $pair = "$env:CLIENT_ID`:$env:CLIENT_SECRET"
-
+      
           $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
-
+      
           $base64 = [Convert]::ToBase64String($bytes)
-
+      
           $headers = @{
               Authorization = "Basic $base64"
               Accept = "application/json"
               "Content-Type" = "application/x-www-form-urlencoded"
           }
-
-          $body = "grant_type=client_credentials&scope=cicd.qualitygates.read cicd.qualitygates.write tenant.valuemomentum project.gwcp"
-
-          $resp = Invoke-RestMethod `
-            -Method Post `
-            -Uri $env:OKTA_URL `
-            -Headers $headers `
-            -Body $body
-
-          if (-not $resp.access_token) {
-
-              throw "Okta token missing"
+      
+          # -------------------------------------------------
+          # FIXED BODY FORMAT
+          # -------------------------------------------------
+          $body = @{
+              grant_type = "client_credentials"
+              scope = "cicd.qualitygates.read cicd.qualitygates.write tenant.valuemomentum project.gwcp"
           }
-
-          "token=$($resp.access_token)" >> $env:GITHUB_OUTPUT
+      
+          try {
+      
+              $resp = Invoke-RestMethod `
+                -Method Post `
+                -Uri $env:OKTA_URL `
+                -Headers $headers `
+                -Body $body `
+                -ErrorAction Stop
+      
+              if (-not $resp.access_token) {
+      
+                  throw "Okta token missing in response"
+              }
+      
+              Write-Host ""
+              Write-Host "Okta token generated successfully"
+      
+              "token=$($resp.access_token)" >> $env:GITHUB_OUTPUT
+          }
+          catch {
+      
+              Write-Host ""
+              Write-Host "========== OKTA TOKEN ERROR =========="
+              Write-Host $_.Exception.Message
+      
+              if ($_.ErrorDetails.Message) {
+      
+                  Write-Host ""
+                  Write-Host "Server Response:"
+                  Write-Host $_.ErrorDetails.Message
+              }
+      
+              throw
+          }
 
       # -------------------------------------------------
       # Update Guidewire Quality Gate
