@@ -75,19 +75,6 @@ jobs:
           "REPORT_DIR=$reportDir" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # -------------------------------------------------
-      # Checkout Source from Bitbucket
-      # -------------------------------------------------
-      - name: Checkout Source
-        shell: powershell
-        run: |
-
-          git config --global http.sslVerify false
-
-          git clone --depth 1 `
-            --branch $env:CLEAN_BRANCH `
-            https://${{ secrets.BITBUCKET_USERNAME }}:${{ secrets.BITBUCKET_TOKEN }}@bitbucket.valuemomentum.alpha3-butterfly.guidewire.net/scm/gwcpdev/${{ inputs.PR_REPOSITORY }}.git
-
-      # -------------------------------------------------
       # Get changed files from Bitbucket
       # -------------------------------------------------
       - name: Get changed files
@@ -108,6 +95,9 @@ jobs:
           }
 
           $url = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoLower/commits/$commit/changes?limit=5000"
+
+          Write-Host "Calling Bitbucket API:"
+          Write-Host $url
 
           $resp = Invoke-RestMethod `
             -Uri $url `
@@ -188,6 +178,14 @@ jobs:
                   Write-Host "Skipping binary/deleted file: $f"
               }
           }
+
+      # -------------------------------------------------
+      # Setup Python
+      # -------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       # -------------------------------------------------
       # Install Semgrep
@@ -304,14 +302,12 @@ jobs:
           $gitleaks = 0
 
           if (Test-Path semgrep-report.json) {
-
               $semgrep = (
                 Get-Content semgrep-report.json | ConvertFrom-Json
               ).results.Count
           }
 
           if (Test-Path gitleaks-report.json) {
-
               $gitleaks = (
                 Get-Content gitleaks-report.json | ConvertFrom-Json
               ).Count
