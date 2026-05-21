@@ -460,9 +460,9 @@ jobs:
         shell: powershell
         env:
           GW_URL: https://cicd-manager-service.api.omega2-andromeda.guidewire.net
-          TENANT: valuemomentum
+          TENANT: valuemom
           STAR: gwcp
-          APP: BC
+          APP: bc
           TOKEN: ${{ steps.okta.outputs.token }}
           COMMIT: ${{ inputs.PR_COMMIT }}
           PR_URL: ${{ inputs.PR_URL }}
