@@ -23,7 +23,7 @@ jobs:
 
   downstream:
 
-    runs-on: windows-latest
+    runs-on: self-hosted
     timeout-minutes: 120
 
     outputs:
@@ -434,7 +434,7 @@ jobs:
 
     needs: downstream
 
-    runs-on: windows-latest
+    runs-on: self-hosted
 
     steps:
 
