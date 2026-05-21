@@ -395,33 +395,62 @@ jobs:
           CLIENT_ID: ${{ secrets.OKTA_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.OKTA_CLIENT_SECRET }}
         run: |
-
+      
           Write-Host "Requesting Okta token..."
-
+      
           $pair = "$env:CLIENT_ID`:$env:CLIENT_SECRET"
-
+      
           $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
-
+      
           $base64 = [Convert]::ToBase64String($bytes)
-
+      
           $headers = @{
               Authorization = "Basic $base64"
-              Accept = "application/json"
-              "Content-Type" = "application/x-www-form-urlencoded"
+              Accept        = "application/json"
+              "Content-Type"= "application/x-www-form-urlencoded"
           }
-
-          $body = "grant_type=client_credentials&scope=cicd.qualitygates.read cicd.qualitygates.write tenant.valuemomentum project.gwcp"
-
-          $resp = Invoke-RestMethod `
-            -Method Post `
-            -Uri $env:OKTA_URL `
-            -Headers $headers `
-            -Body $body
-
+      
+          # IMPORTANT
+          # Use EXACT SAME scope as working pipeline
+          $body = "grant_type=client_credentials&scope=cicd.qualitygates.read cicd.qualitygates.write tenant.valuemom project.gwcp planet_class.lower"
+      
+          try {
+      
+              $resp = Invoke-RestMethod `
+                -Method Post `
+                -Uri $env:OKTA_URL `
+                -Headers $headers `
+                -Body $body `
+                -ErrorAction Stop
+          }
+          catch {
+      
+              Write-Host "Okta request failed"
+      
+              if ($_.Exception.Response -ne $null) {
+      
+                  $reader = New-Object System.IO.StreamReader(
+                    $_.Exception.Response.GetResponseStream()
+                  )
+      
+                  $reader.BaseStream.Position = 0
+                  $reader.DiscardBufferedData()
+      
+                  Write-Host ($reader.ReadToEnd())
+              }
+      
+              throw "Okta authentication failed"
+          }
+      
           if (-not $resp.access_token) {
-              throw "Okta token missing"
+      
+              $resp | ConvertTo-Json -Depth 5
+      
+              throw "Okta returned no access_token"
           }
-
+      
+          Write-Host "Okta token acquired"
+      
           "token=$($resp.access_token)" >> $env:GITHUB_OUTPUT
 
       # -------------------------------------------------
