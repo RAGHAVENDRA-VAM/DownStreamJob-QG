@@ -88,26 +88,41 @@ jobs:
           $commit = "${{ inputs.PR_COMMIT }}"
           $project = "gwcpdev"
 
-          $repoLower = $repo.ToLower()
+          # IMPORTANT FIX
+          # Bitbucket repo slug may not be lowercase
+          $repoSlug = $repo
 
           $headers = @{
             Authorization = "Bearer $env:TOKEN"
           }
 
-          $url = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoLower/commits/$commit/changes?limit=5000"
+          $url = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoSlug/commits/$commit/changes?limit=5000"
 
           Write-Host "Calling Bitbucket API:"
           Write-Host $url
 
-          $resp = Invoke-RestMethod `
-            -Uri $url `
-            -Headers $headers `
-            -Method Get
+          try {
+
+              $resp = Invoke-RestMethod `
+                -Uri $url `
+                -Headers $headers `
+                -Method Get `
+                -ErrorAction Stop
+          }
+          catch {
+
+              Write-Host ""
+              Write-Host "Bitbucket API failed"
+              Write-Host $_.Exception.Message
+              Write-Host ""
+
+              throw
+          }
 
           New-Item `
             -ItemType Directory `
             -Path scanfiles `
-            -Force
+            -Force | Out-Null
 
           $files = @()
 
@@ -120,6 +135,7 @@ jobs:
 
           $files | Out-File changed_files.txt -Encoding utf8
 
+          Write-Host ""
           Write-Host "Changed files:"
           $files
 
@@ -137,10 +153,17 @@ jobs:
           $commit = "${{ inputs.PR_COMMIT }}"
           $project = "gwcpdev"
 
-          $repoLower = $repo.ToLower()
+          # IMPORTANT FIX
+          $repoSlug = $repo
 
           $headers = @{
             Authorization = "Bearer $env:TOKEN"
+          }
+
+          if (-not (Test-Path changed_files.txt)) {
+
+              Write-Host "No changed_files.txt found"
+              exit 0
           }
 
           $files = Get-Content changed_files.txt
@@ -151,7 +174,7 @@ jobs:
                   continue
               }
 
-              $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoLower/raw/$f?at=$commit"
+              $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoSlug/raw/$f?at=$commit"
 
               $dest = "scanfiles\$f"
 
@@ -161,7 +184,7 @@ jobs:
                 -ItemType Directory `
                 -Path $dir `
                 -Force `
-                -ErrorAction SilentlyContinue
+                -ErrorAction SilentlyContinue | Out-Null
 
               try {
 
@@ -207,8 +230,6 @@ jobs:
           Write-Host "Semgrep found at: $semgrepPath"
 
           semgrep --version
-
-          Write-Host "Semgrep ready"
 
       # -------------------------------------------------
       # Run Semgrep
@@ -302,12 +323,14 @@ jobs:
           $gitleaks = 0
 
           if (Test-Path semgrep-report.json) {
+
               $semgrep = (
                 Get-Content semgrep-report.json | ConvertFrom-Json
               ).results.Count
           }
 
           if (Test-Path gitleaks-report.json) {
+
               $gitleaks = (
                 Get-Content gitleaks-report.json | ConvertFrom-Json
               ).Count
@@ -449,4 +472,3 @@ jobs:
           else {
 
               Write-Host "Security gate passed"
-          }
