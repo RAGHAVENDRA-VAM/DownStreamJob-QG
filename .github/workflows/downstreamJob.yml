@@ -54,7 +54,7 @@ jobs:
       # Prepare Context
       # -------------------------------------------------
       - name: Prepare Context
-        shell: pwsh
+        shell: powershell
         run: |
 
           $cleanBranch = "${{ inputs.PR_BRANCH }}" -replace "^refs/heads/", ""
@@ -78,7 +78,7 @@ jobs:
       # Checkout Source from Bitbucket
       # -------------------------------------------------
       - name: Checkout Source
-        shell: pwsh
+        shell: powershell
         run: |
 
           git config --global http.sslVerify false
@@ -91,7 +91,7 @@ jobs:
       # Get changed files from Bitbucket
       # -------------------------------------------------
       - name: Get changed files
-        shell: pwsh
+        shell: powershell
         env:
           HOST: ${{ secrets.GW_BITBUCKET_BASE }}
           TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
@@ -137,7 +137,7 @@ jobs:
       # Download changed files
       # -------------------------------------------------
       - name: Download changed files
-        shell: pwsh
+        shell: powershell
         env:
           HOST: ${{ secrets.GW_BITBUCKET_BASE }}
           TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
@@ -193,7 +193,7 @@ jobs:
       # Install Semgrep
       # -------------------------------------------------
       - name: Install Semgrep
-        shell: pwsh
+        shell: powershell
         run: |
 
           python -m pip install --upgrade pip
@@ -216,7 +216,7 @@ jobs:
       # Run Semgrep
       # -------------------------------------------------
       - name: Run Semgrep
-        shell: pwsh
+        shell: powershell
         run: |
 
           chcp 65001 > $null
@@ -240,7 +240,7 @@ jobs:
       # Install Gitleaks
       # -------------------------------------------------
       - name: Install Gitleaks
-        shell: pwsh
+        shell: powershell
         run: |
 
           $gitleaks = Get-Command gitleaks -ErrorAction SilentlyContinue
@@ -273,7 +273,7 @@ jobs:
       # Run Gitleaks
       # -------------------------------------------------
       - name: Run Gitleaks
-        shell: pwsh
+        shell: powershell
         run: |
 
           $gitleaksExe = "$env:RUNNER_TEMP\gitleaks\gitleaks.exe"
@@ -297,7 +297,7 @@ jobs:
       # -------------------------------------------------
       - name: Aggregate findings
         id: aggregate
-        shell: pwsh
+        shell: powershell
         run: |
 
           $semgrep = 0
@@ -341,7 +341,7 @@ jobs:
       # -------------------------------------------------
       - name: Get Okta token
         id: okta
-        shell: pwsh
+        shell: powershell
         env:
           OKTA_URL: ${{ secrets.OKTA_TOKEN_URL }}
           CLIENT_ID: ${{ secrets.OKTA_CLIENT_ID }}
@@ -380,7 +380,7 @@ jobs:
       # Update Guidewire Quality Gate
       # -------------------------------------------------
       - name: Update Guidewire Quality Gate
-        shell: pwsh
+        shell: powershell
         env:
           GW_URL: https://cicd-manager-service.api.omega2-andromeda.guidewire.net
           TENANT: valuemomentum
@@ -439,7 +439,7 @@ jobs:
     steps:
 
       - name: Enforce Security Gate
-        shell: pwsh
+        shell: powershell
         run: |
 
           $total = "${{ needs.downstream.outputs.total }}"
