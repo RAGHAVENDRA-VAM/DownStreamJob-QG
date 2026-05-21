@@ -4,18 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       PR_REPOSITORY:
+        description: "Bitbucket Repository Slug"
         required: true
         type: string
 
       PR_BRANCH:
+        description: "Pull Request Branch"
         required: true
         type: string
 
       PR_COMMIT:
+        description: "Pull Request Commit SHA"
         required: true
         type: string
 
       PR_URL:
+        description: "Pull Request URL"
         required: true
         type: string
 
@@ -33,7 +37,9 @@ jobs:
       APP_NAME: BillingCenter
       CICD_APP: BC
 
-      BITBUCKET_BASE_URL: https://bitbucket.valuemomentum.alpha3-butterfly.guidewire.net
+      # IMPORTANT
+      # Actual Bitbucket host from your PR URL
+      BITBUCKET_PROJECT: GWCPDEV
 
       CICD_BASE_URL: https://cicd-manager-service.api.omega2-andromeda.guidewire.net
       CICD_TENANT: valuemomentum
@@ -59,23 +65,67 @@ jobs:
 
           $cleanBranch = "${{ inputs.PR_BRANCH }}" -replace "^refs/heads/", ""
 
-          $repoUrl = "$env:BITBUCKET_BASE_URL/scm/gwcpdev/${{ inputs.PR_REPOSITORY }}.git"
-
-          $reportDir = "reports/$env:APP_NAME/PR-${{ inputs.PR_COMMIT }}"
-
+          Write-Host ""
+          Write-Host "================================="
           Write-Host "Application Context"
-          Write-Host "-------------------"
+          Write-Host "================================="
           Write-Host "Application : $env:APP_NAME"
           Write-Host "Repository  : ${{ inputs.PR_REPOSITORY }}"
           Write-Host "Branch      : $cleanBranch"
           Write-Host "Commit      : ${{ inputs.PR_COMMIT }}"
+          Write-Host "================================="
+          Write-Host ""
 
-          "CLEAN_BRANCH=$cleanBranch" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "REPO_URL=$repoUrl" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "REPORT_DIR=$reportDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CLEAN_BRANCH=$cleanBranch" >> $env:GITHUB_ENV
 
       # -------------------------------------------------
-      # Get changed files from Bitbucket
+      # Validate Repository Access
+      # -------------------------------------------------
+      - name: Validate Repository Access
+        shell: powershell
+        env:
+          HOST: ${{ secrets.GW_BITBUCKET_BASE }}
+          TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
+        run: |
+
+          $repo = "${{ inputs.PR_REPOSITORY }}"
+          $project = "$env:BITBUCKET_PROJECT"
+
+          $headers = @{
+            Authorization = "Bearer $env:TOKEN"
+          }
+
+          $repoUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo"
+
+          Write-Host ""
+          Write-Host "Validating Bitbucket repository..."
+          Write-Host $repoUrl
+          Write-Host ""
+
+          try {
+
+              $repoResp = Invoke-RestMethod `
+                -Uri $repoUrl `
+                -Headers $headers `
+                -Method Get `
+                -ErrorAction Stop
+
+              Write-Host "Repository Found"
+              Write-Host "Name : $($repoResp.name)"
+              Write-Host "Slug : $($repoResp.slug)"
+          }
+          catch {
+
+              Write-Host ""
+              Write-Host "Repository validation failed"
+              Write-Host $_.Exception.Message
+              Write-Host ""
+
+              throw
+          }
+
+      # -------------------------------------------------
+      # Get Changed Files
       # -------------------------------------------------
       - name: Get changed files
         shell: powershell
@@ -86,20 +136,18 @@ jobs:
 
           $repo   = "${{ inputs.PR_REPOSITORY }}"
           $commit = "${{ inputs.PR_COMMIT }}"
-          $project = "gwcpdev"
-
-          # IMPORTANT FIX
-          # Bitbucket repo slug may not be lowercase
-          $repoSlug = $repo
+          $project = "$env:BITBUCKET_PROJECT"
 
           $headers = @{
             Authorization = "Bearer $env:TOKEN"
           }
 
-          $url = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoSlug/commits/$commit/changes?limit=5000"
+          $url = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo/commits/$commit/changes?limit=5000"
 
-          Write-Host "Calling Bitbucket API:"
+          Write-Host ""
+          Write-Host "Calling Bitbucket API"
           Write-Host $url
+          Write-Host ""
 
           try {
 
@@ -129,6 +177,7 @@ jobs:
           foreach ($v in $resp.values) {
 
               if ($v.path.toString) {
+
                   $files += $v.path.toString
               }
           }
@@ -137,10 +186,12 @@ jobs:
 
           Write-Host ""
           Write-Host "Changed files:"
+          Write-Host "===================="
+
           $files
 
       # -------------------------------------------------
-      # Download changed files
+      # Download Changed Files
       # -------------------------------------------------
       - name: Download changed files
         shell: powershell
@@ -151,10 +202,7 @@ jobs:
 
           $repo   = "${{ inputs.PR_REPOSITORY }}"
           $commit = "${{ inputs.PR_COMMIT }}"
-          $project = "gwcpdev"
-
-          # IMPORTANT FIX
-          $repoSlug = $repo
+          $project = "$env:BITBUCKET_PROJECT"
 
           $headers = @{
             Authorization = "Bearer $env:TOKEN"
@@ -174,7 +222,7 @@ jobs:
                   continue
               }
 
-              $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoSlug/raw/$f?at=$commit"
+              $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo/raw/$f?at=$commit"
 
               $dest = "scanfiles\$f"
 
@@ -198,7 +246,7 @@ jobs:
               }
               catch {
 
-                  Write-Host "Skipping binary/deleted file: $f"
+                  Write-Host "Skipping file: $f"
               }
           }
 
@@ -220,14 +268,6 @@ jobs:
           python -m pip install --upgrade pip
 
           pip install semgrep
-
-          $semgrepPath = (Get-Command semgrep -ErrorAction SilentlyContinue).Source
-
-          if (-not $semgrepPath) {
-              throw "Semgrep executable not found"
-          }
-
-          Write-Host "Semgrep found at: $semgrepPath"
 
           semgrep --version
 
@@ -262,29 +302,18 @@ jobs:
         shell: powershell
         run: |
 
-          $gitleaks = Get-Command gitleaks -ErrorAction SilentlyContinue
+          $version = "8.24.2"
 
-          if (-not $gitleaks) {
+          Invoke-WebRequest `
+            -Uri "https://github.com/gitleaks/gitleaks/releases/download/v$version/gitleaks_${version}_windows_x64.zip" `
+            -OutFile "gitleaks.zip"
 
-              Write-Host "Installing Gitleaks..."
-
-              $version = "8.24.2"
-
-              Invoke-WebRequest `
-                -Uri "https://github.com/gitleaks/gitleaks/releases/download/v$version/gitleaks_${version}_windows_x64.zip" `
-                -OutFile "gitleaks.zip"
-
-              Expand-Archive `
-                gitleaks.zip `
-                -DestinationPath "$env:RUNNER_TEMP\gitleaks" `
-                -Force
-          }
+          Expand-Archive `
+            gitleaks.zip `
+            -DestinationPath "$env:RUNNER_TEMP\gitleaks" `
+            -Force
 
           $gitleaksExe = "$env:RUNNER_TEMP\gitleaks\gitleaks.exe"
-
-          if (-not (Test-Path $gitleaksExe)) {
-              throw "gitleaks.exe not found"
-          }
 
           & $gitleaksExe version
 
@@ -312,7 +341,7 @@ jobs:
           }
 
       # -------------------------------------------------
-      # Aggregate findings
+      # Aggregate Findings
       # -------------------------------------------------
       - name: Aggregate findings
         id: aggregate
@@ -338,12 +367,20 @@ jobs:
 
           $total = $semgrep + $gitleaks
 
-          Write-Host "TOTAL findings: $total"
+          Write-Host ""
+          Write-Host "================================="
+          Write-Host "Security Scan Summary"
+          Write-Host "================================="
+          Write-Host "Semgrep Findings : $semgrep"
+          Write-Host "Gitleaks Findings: $gitleaks"
+          Write-Host "Total Findings   : $total"
+          Write-Host "================================="
+          Write-Host ""
 
           "total=$total" >> $env:GITHUB_OUTPUT
 
       # -------------------------------------------------
-      # Upload reports
+      # Upload Reports
       # -------------------------------------------------
       - name: Upload reports
         if: always()
@@ -390,6 +427,7 @@ jobs:
             -Body $body
 
           if (-not $resp.access_token) {
+
               throw "Okta token missing"
           }
 
@@ -433,7 +471,7 @@ jobs:
             comment = $comment
           } | ConvertTo-Json -Depth 5
 
-          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/prqualitygate/verifications"
+          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/prqualitygatedemo/verifications"
 
           Invoke-RestMethod `
             -Method Post `
@@ -472,3 +510,4 @@ jobs:
           else {
 
               Write-Host "Security gate passed"
+          }
