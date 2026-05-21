@@ -1,4 +1,4 @@
-name: Downstream Job - ContactManager PR Quality Gate
+name: Downstream Job - BillingCenter PR Quality Gate
 
 on:
   workflow_dispatch:
@@ -6,25 +6,32 @@ on:
       PR_REPOSITORY:
         required: true
         type: string
+
       PR_BRANCH:
         required: true
         type: string
+
       PR_COMMIT:
         required: true
         type: string
+
       PR_URL:
         required: true
         type: string
 
 jobs:
+
   downstream:
+
     runs-on: windows-latest
     timeout-minutes: 120
 
+    outputs:
+      total: ${{ steps.aggregate.outputs.total }}
+
     env:
-      APP_NAME: ContactManager
-      REPO_SLUG: contactmanager
-      CICD_APP: CM
+      APP_NAME: BillingCenter
+      CICD_APP: BC
 
       BITBUCKET_BASE_URL: https://bitbucket.valuemomentum.alpha3-butterfly.guidewire.net
 
@@ -37,14 +44,23 @@ jobs:
 
     steps:
 
-      # -------------------------------
+      # -------------------------------------------------
+      # Checkout Workflow Repo
+      # -------------------------------------------------
+      - name: Checkout Workflow Repo
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------
       # Prepare Context
-      # -------------------------------
+      # -------------------------------------------------
       - name: Prepare Context
         shell: pwsh
         run: |
+
           $cleanBranch = "${{ inputs.PR_BRANCH }}" -replace "^refs/heads/", ""
-          $repoUrl = "$env:BITBUCKET_BASE_URL/scm/gwcpdev/$env:REPO_SLUG.git"
+
+          $repoUrl = "$env:BITBUCKET_BASE_URL/scm/gwcpdev/${{ inputs.PR_REPOSITORY }}.git"
+
           $reportDir = "reports/$env:APP_NAME/PR-${{ inputs.PR_COMMIT }}"
 
           Write-Host "Application Context"
@@ -58,83 +74,383 @@ jobs:
           "REPO_URL=$repoUrl" | Out-File -FilePath $env:GITHUB_ENV -Append
           "REPORT_DIR=$reportDir" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      # -------------------------------
+      # -------------------------------------------------
       # Checkout Source from Bitbucket
-      # -------------------------------
+      # -------------------------------------------------
       - name: Checkout Source
         shell: pwsh
         run: |
+
           git config --global http.sslVerify false
+
           git clone --depth 1 `
             --branch $env:CLEAN_BRANCH `
-            https://${{ secrets.BITBUCKET_USERNAME }}:${{ secrets.BITBUCKET_TOKEN }}@${{ env.BITBUCKET_BASE_URL.Replace("https://","") }}/scm/gwcpdev/${{ env.REPO_SLUG }}.git
+            https://${{ secrets.BITBUCKET_USERNAME }}:${{ secrets.BITBUCKET_TOKEN }}@${{ env.BITBUCKET_BASE_URL.Replace("https://","") }}/scm/gwcpdev/${{ inputs.PR_REPOSITORY }}.git
 
-      # -------------------------------
-      # (Place Your Build / Scan Steps Here)
-      # -------------------------------
-
-      - name: Simulate Build
+      # -------------------------------------------------
+      # Get changed files from Bitbucket
+      # -------------------------------------------------
+      - name: Get changed files
         shell: pwsh
+        env:
+          HOST: ${{ secrets.GW_BITBUCKET_BASE }}
+          TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
         run: |
-          Write-Host "Running Quality Gates..."
-          Start-Sleep -Seconds 10
-          Write-Host "Validation Completed"
 
-      # -------------------------------
-      # Get Okta Access Token
-      # -------------------------------
-      - name: Get Okta Access Token
-        shell: pwsh
-        run: |
-          $body = @{
-              grant_type = "client_credentials"
-              scope = "cicd.qualitygates.read cicd.qualitygates.write tenant.$env:CICD_TENANT project.$env:CICD_STAR_SYSTEM"
-              client_id = "${{ secrets.OKTA_CLIENT_ID }}"
-              client_secret = "${{ secrets.OKTA_CLIENT_SECRET }}"
-          }
+          $repo   = "${{ inputs.PR_REPOSITORY }}"
+          $commit = "${{ inputs.PR_COMMIT }}"
+          $project = "gwcpdev"
 
-          $response = Invoke-RestMethod `
-            -Method Post `
-            -Uri $env:OKTA_TOKEN_URL `
-            -ContentType "application/x-www-form-urlencoded" `
-            -Body $body
-
-          $token = $response.access_token
-
-          if (-not $token) {
-              Write-Error "Failed to retrieve Okta token"
-              exit 1
-          }
-
-          "CICD_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      # -------------------------------
-      # Close Guidewire Quality Gate
-      # -------------------------------
-      - name: Close Guidewire Quality Gate
-        shell: pwsh
-        run: |
-          $url = "$env:CICD_BASE_URL/api/v3/tenants/$env:CICD_TENANT/starsystems/$env:CICD_STAR_SYSTEM/applications/$env:CICD_APP/quality-gates/$env:CICD_QUALITY_GATE/verifications"
+          $repoLower = $repo.ToLower()
 
           $headers = @{
-              Authorization = "Bearer $env:CICD_TOKEN"
-              "Content-Type" = "application/json"
+            Authorization = "Bearer $env:TOKEN"
           }
 
-          $body = @{
-              artifact = @{
-                  type = "COMMIT"
-                  id   = "${{ inputs.PR_COMMIT }}"
-              }
-              status  = "SUCCESSFUL"
-              url     = "${{ inputs.PR_URL }}"
-              comment = "Security scans completed – findings accepted as per CM policy"
-          } | ConvertTo-Json -Depth 5
+          $url = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoLower/commits/$commit/changes?limit=5000"
 
-          Invoke-RestMethod `
-            -Method Post `
+          $resp = Invoke-RestMethod `
             -Uri $url `
+            -Headers $headers `
+            -Method Get
+
+          New-Item `
+            -ItemType Directory `
+            -Path scanfiles `
+            -Force
+
+          $files = @()
+
+          foreach ($v in $resp.values) {
+
+              if ($v.path.toString) {
+                  $files += $v.path.toString
+              }
+          }
+
+          $files | Out-File changed_files.txt -Encoding utf8
+
+          Write-Host "Changed files:"
+          $files
+
+      # -------------------------------------------------
+      # Download changed files
+      # -------------------------------------------------
+      - name: Download changed files
+        shell: pwsh
+        env:
+          HOST: ${{ secrets.GW_BITBUCKET_BASE }}
+          TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
+        run: |
+
+          $repo   = "${{ inputs.PR_REPOSITORY }}"
+          $commit = "${{ inputs.PR_COMMIT }}"
+          $project = "gwcpdev"
+
+          $repoLower = $repo.ToLower()
+
+          $headers = @{
+            Authorization = "Bearer $env:TOKEN"
+          }
+
+          $files = Get-Content changed_files.txt
+
+          foreach ($f in $files) {
+
+              if ([string]::IsNullOrWhiteSpace($f)) {
+                  continue
+              }
+
+              $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repoLower/raw/$f?at=$commit"
+
+              $dest = "scanfiles\$f"
+
+              $dir = Split-Path $dest
+
+              New-Item `
+                -ItemType Directory `
+                -Path $dir `
+                -Force `
+                -ErrorAction SilentlyContinue
+
+              try {
+
+                  Invoke-WebRequest `
+                    -Uri $fileUrl `
+                    -Headers $headers `
+                    -OutFile $dest `
+                    -ErrorAction Stop
+
+                  Write-Host "Downloaded $f"
+              }
+              catch {
+
+                  Write-Host "Skipping binary/deleted file: $f"
+              }
+          }
+
+      # -------------------------------------------------
+      # Install Semgrep
+      # -------------------------------------------------
+      - name: Install Semgrep
+        shell: pwsh
+        run: |
+
+          python -m pip install --upgrade pip
+
+          pip install semgrep
+
+          $semgrepPath = (Get-Command semgrep -ErrorAction SilentlyContinue).Source
+
+          if (-not $semgrepPath) {
+              throw "Semgrep executable not found"
+          }
+
+          Write-Host "Semgrep found at: $semgrepPath"
+
+          semgrep --version
+
+          Write-Host "Semgrep ready"
+
+      # -------------------------------------------------
+      # Run Semgrep
+      # -------------------------------------------------
+      - name: Run Semgrep
+        shell: pwsh
+        run: |
+
+          chcp 65001 > $null
+
+          $env:PYTHONUTF8 = "1"
+          $env:PYTHONIOENCODING = "utf-8"
+
+          if (Test-Path scanfiles) {
+
+              semgrep scan scanfiles `
+                --config=auto `
+                --json `
+                -o semgrep-report.json
+          }
+          else {
+
+              '{"results":[]}' | Out-File semgrep-report.json -Encoding utf8
+          }
+
+      # -------------------------------------------------
+      # Install Gitleaks
+      # -------------------------------------------------
+      - name: Install Gitleaks
+        shell: pwsh
+        run: |
+
+          $gitleaks = Get-Command gitleaks -ErrorAction SilentlyContinue
+
+          if (-not $gitleaks) {
+
+              Write-Host "Installing Gitleaks..."
+
+              $version = "8.24.2"
+
+              Invoke-WebRequest `
+                -Uri "https://github.com/gitleaks/gitleaks/releases/download/v$version/gitleaks_${version}_windows_x64.zip" `
+                -OutFile "gitleaks.zip"
+
+              Expand-Archive `
+                gitleaks.zip `
+                -DestinationPath "$env:RUNNER_TEMP\gitleaks" `
+                -Force
+          }
+
+          $gitleaksExe = "$env:RUNNER_TEMP\gitleaks\gitleaks.exe"
+
+          if (-not (Test-Path $gitleaksExe)) {
+              throw "gitleaks.exe not found"
+          }
+
+          & $gitleaksExe version
+
+      # -------------------------------------------------
+      # Run Gitleaks
+      # -------------------------------------------------
+      - name: Run Gitleaks
+        shell: pwsh
+        run: |
+
+          $gitleaksExe = "$env:RUNNER_TEMP\gitleaks\gitleaks.exe"
+
+          if (Test-Path scanfiles) {
+
+              & $gitleaksExe detect `
+                --no-git `
+                --source scanfiles `
+                --report-format json `
+                --report-path gitleaks-report.json `
+                --exit-code 0
+          }
+          else {
+
+              "[]" | Out-File gitleaks-report.json -Encoding utf8
+          }
+
+      # -------------------------------------------------
+      # Aggregate findings
+      # -------------------------------------------------
+      - name: Aggregate findings
+        id: aggregate
+        shell: pwsh
+        run: |
+
+          $semgrep = 0
+          $gitleaks = 0
+
+          if (Test-Path semgrep-report.json) {
+
+              $semgrep = (
+                Get-Content semgrep-report.json | ConvertFrom-Json
+              ).results.Count
+          }
+
+          if (Test-Path gitleaks-report.json) {
+
+              $gitleaks = (
+                Get-Content gitleaks-report.json | ConvertFrom-Json
+              ).Count
+          }
+
+          $total = $semgrep + $gitleaks
+
+          Write-Host "TOTAL findings: $total"
+
+          "total=$total" >> $env:GITHUB_OUTPUT
+
+      # -------------------------------------------------
+      # Upload reports
+      # -------------------------------------------------
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: billingcenter-security-reports
+          path: |
+            semgrep-report.json
+            gitleaks-report.json
+            changed_files.txt
+
+      # -------------------------------------------------
+      # Get Okta Token
+      # -------------------------------------------------
+      - name: Get Okta token
+        id: okta
+        shell: pwsh
+        env:
+          OKTA_URL: ${{ secrets.OKTA_TOKEN_URL }}
+          CLIENT_ID: ${{ secrets.OKTA_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.OKTA_CLIENT_SECRET }}
+        run: |
+
+          Write-Host "Requesting Okta token..."
+
+          $pair = "$env:CLIENT_ID`:$env:CLIENT_SECRET"
+
+          $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
+
+          $base64 = [Convert]::ToBase64String($bytes)
+
+          $headers = @{
+              Authorization = "Basic $base64"
+              Accept = "application/json"
+              "Content-Type" = "application/x-www-form-urlencoded"
+          }
+
+          $body = "grant_type=client_credentials&scope=cicd.qualitygates.read cicd.qualitygates.write tenant.valuemomentum project.gwcp"
+
+          $resp = Invoke-RestMethod `
+            -Method Post `
+            -Uri $env:OKTA_URL `
             -Headers $headers `
             -Body $body
 
-          Write-Host "Quality Gate closed successfully."
+          if (-not $resp.access_token) {
+              throw "Okta token missing"
+          }
+
+          "token=$($resp.access_token)" >> $env:GITHUB_OUTPUT
+
+      # -------------------------------------------------
+      # Update Guidewire Quality Gate
+      # -------------------------------------------------
+      - name: Update Guidewire Quality Gate
+        shell: pwsh
+        env:
+          GW_URL: https://cicd-manager-service.api.omega2-andromeda.guidewire.net
+          TENANT: valuemomentum
+          STAR: gwcp
+          APP: BC
+          TOKEN: ${{ steps.okta.outputs.token }}
+          COMMIT: ${{ inputs.PR_COMMIT }}
+          PR_URL: ${{ inputs.PR_URL }}
+        run: |
+
+          $total = "${{ steps.aggregate.outputs.total }}"
+
+          if ($total -gt 0) {
+
+              $status = "FAILED"
+              $comment = "Security findings detected"
+          }
+          else {
+
+              $status = "SUCCESSFUL"
+              $comment = "Security scans passed"
+          }
+
+          $body = @{
+            artifact = @{
+              type = "COMMIT"
+              id   = $env:COMMIT
+            }
+            status = $status
+            url = $env:PR_URL
+            comment = $comment
+          } | ConvertTo-Json -Depth 5
+
+          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/prqualitygate/verifications"
+
+          Invoke-RestMethod `
+            -Method Post `
+            -Uri $uri `
+            -Headers @{
+              Authorization = "Bearer $env:TOKEN"
+            } `
+            -Body $body `
+            -ContentType "application/json"
+
+          Write-Host "Guidewire quality gate updated"
+
+  # -------------------------------------------------
+  # Final Security Gate
+  # -------------------------------------------------
+  final-gate:
+
+    needs: downstream
+
+    runs-on: self-hosted
+
+    steps:
+
+      - name: Enforce Security Gate
+        shell: pwsh
+        run: |
+
+          $total = "${{ needs.downstream.outputs.total }}"
+
+          if ($total -gt 0) {
+
+              Write-Host "Security findings detected"
+
+              exit 1
+          }
+          else {
+
+              Write-Host "Security gate passed"
+          }
