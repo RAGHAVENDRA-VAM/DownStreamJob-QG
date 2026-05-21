@@ -85,7 +85,7 @@ jobs:
 
           git clone --depth 1 `
             --branch $env:CLEAN_BRANCH `
-            https://${{ secrets.BITBUCKET_USERNAME }}:${{ secrets.BITBUCKET_TOKEN }}@${{ env.BITBUCKET_BASE_URL.Replace("https://","") }}/scm/gwcpdev/${{ inputs.PR_REPOSITORY }}.git
+            https://${{ secrets.BITBUCKET_USERNAME }}:${{ secrets.BITBUCKET_TOKEN }}@bitbucket.valuemomentum.alpha3-butterfly.guidewire.net/scm/gwcpdev/${{ inputs.PR_REPOSITORY }}.git
 
       # -------------------------------------------------
       # Get changed files from Bitbucket
@@ -434,7 +434,7 @@ jobs:
 
     needs: downstream
 
-    runs-on: self-hosted
+    runs-on: windows-latest
 
     steps:
 
