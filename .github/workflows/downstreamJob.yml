@@ -101,13 +101,19 @@ jobs:
           Write-Host $repoUrl
           Write-Host ""
 
-          Invoke-RestMethod `
+          $repoResp = Invoke-RestMethod `
             -Uri $repoUrl `
             -Headers $headers `
             -Method Get `
             -ErrorAction Stop
 
+          Write-Host ""
           Write-Host "Repository validation successful"
+          Write-Host "Repository Name : $($repoResp.name)"
+          Write-Host "Repository Slug : $($repoResp.slug)"
+          Write-Host ""
+
+          "REPO_SLUG=$($repoResp.slug)" >> $env:GITHUB_ENV
 
       # -------------------------------------------------
       # Get Changed Files
@@ -119,7 +125,7 @@ jobs:
           TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
         run: |
 
-          $repo = "${{ inputs.PR_REPOSITORY }}"
+          $repo = "$env:REPO_SLUG"
           $commit = "${{ inputs.PR_COMMIT }}"
           $project = "$env:BITBUCKET_PROJECT"
 
@@ -173,7 +179,7 @@ jobs:
           TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
         run: |
 
-          $repo = "${{ inputs.PR_REPOSITORY }}"
+          $repo = "$env:REPO_SLUG"
           $commit = "${{ inputs.PR_COMMIT }}"
           $project = "$env:BITBUCKET_PROJECT"
 
@@ -189,11 +195,16 @@ jobs:
                   continue
               }
 
+              # IMPORTANT FIX
+              # Do NOT URL encode full path
+              # Bitbucket raw API expects normal path
+
               $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo/raw/$f?at=$commit"
 
               Write-Host ""
               Write-Host "Downloading:"
               Write-Host $fileUrl
+              Write-Host ""
 
               $dest = "scanfiles\$f"
 
@@ -214,6 +225,10 @@ jobs:
                     -ErrorAction Stop
 
                   Write-Host "Downloaded: $f"
+
+                  $size = (Get-Item $dest).Length
+
+                  Write-Host "Downloaded Size: $size bytes"
               }
               catch {
 
@@ -276,12 +291,17 @@ jobs:
 
           if (Test-Path scanfiles) {
 
+              Write-Host ""
+              Write-Host "Running Gitleaks Scan..."
+              Write-Host ""
+
               & $gitleaksExe detect `
                 --no-git `
                 --source scanfiles `
                 --report-format json `
                 --report-path gitleaks-report.json `
-                --exit-code 0
+                --exit-code 0 `
+                --verbose
           }
           else {
 
@@ -396,23 +416,29 @@ jobs:
 
           $total = "${{ steps.aggregate.outputs.total }}"
 
-          if ($total -gt 0) {
-
-              Write-Host ""
-              Write-Host "================================="
-              Write-Host "Secrets detected by Gitleaks"
-              Write-Host "Demo mode enabled"
-              Write-Host "Pipeline will PASS"
-              Write-Host "================================="
-              Write-Host ""
+          if ([int]$total -gt 0) {
 
               $status = "FAILED"
               $comment = "Secrets detected by Gitleaks"
+
+              Write-Host ""
+              Write-Host "================================="
+              Write-Host "SECRETS DETECTED"
+              Write-Host "QUALITY GATE FAILED"
+              Write-Host "================================="
+              Write-Host ""
           }
           else {
 
               $status = "SUCCESSFUL"
               $comment = "No secrets detected"
+
+              Write-Host ""
+              Write-Host "================================="
+              Write-Host "NO SECRETS DETECTED"
+              Write-Host "QUALITY GATE SUCCESSFUL"
+              Write-Host "================================="
+              Write-Host ""
           }
 
           $body = @{
@@ -462,15 +488,16 @@ jobs:
 
           $total = "${{ needs.downstream.outputs.total }}"
 
-          if ($total -gt 0) {
+          if ([int]$total -gt 0) {
 
               Write-Host ""
               Write-Host "================================="
-              Write-Host "Secrets detected"
-              Write-Host "Demo mode enabled"
-              Write-Host "Pipeline intentionally continuing"
+              Write-Host "Security findings detected"
+              Write-Host "Failing pipeline"
               Write-Host "================================="
               Write-Host ""
+
+              exit 1
           }
           else {
 
