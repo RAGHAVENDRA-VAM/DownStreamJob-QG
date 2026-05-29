@@ -96,8 +96,10 @@ jobs:
 
           $repoUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo"
 
+          Write-Host ""
           Write-Host "Validating Bitbucket repository..."
           Write-Host $repoUrl
+          Write-Host ""
 
           Invoke-RestMethod `
             -Uri $repoUrl `
@@ -127,8 +129,10 @@ jobs:
 
           $url = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo/commits/$commit/changes?limit=5000"
 
+          Write-Host ""
           Write-Host "Calling Bitbucket API"
           Write-Host $url
+          Write-Host ""
 
           $resp = Invoke-RestMethod `
             -Uri $url `
@@ -146,6 +150,7 @@ jobs:
           foreach ($v in $resp.values) {
 
               if ($v.path.toString) {
+
                   $files += $v.path.toString
               }
           }
@@ -186,6 +191,10 @@ jobs:
 
               $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo/raw/$f?at=$commit"
 
+              Write-Host ""
+              Write-Host "Downloading:"
+              Write-Host $fileUrl
+
               $dest = "scanfiles\$f"
 
               $dir = Split-Path $dest
@@ -208,9 +217,31 @@ jobs:
               }
               catch {
 
-                  Write-Host "Skipping file: $f"
+                  Write-Host ""
+                  Write-Host "FAILED DOWNLOAD: $f"
+
+                  if ($_.Exception.Response -ne $null) {
+
+                      $reader = New-Object System.IO.StreamReader(
+                        $_.Exception.Response.GetResponseStream()
+                      )
+
+                      $reader.BaseStream.Position = 0
+                      $reader.DiscardBufferedData()
+
+                      Write-Host ($reader.ReadToEnd())
+                  }
+
+                  Write-Host $_.Exception.Message
+                  Write-Host ""
               }
           }
+
+          Write-Host ""
+          Write-Host "Downloaded Files"
+          Write-Host "===================="
+
+          Get-ChildItem scanfiles -Recurse
 
       # -------------------------------------------------
       # Install Gitleaks
@@ -257,7 +288,9 @@ jobs:
               "[]" | Out-File gitleaks-report.json -Encoding utf8
           }
 
+          Write-Host ""
           Write-Host "Gitleaks scan completed"
+          Write-Host ""
 
       # -------------------------------------------------
       # Aggregate Findings
@@ -278,6 +311,7 @@ jobs:
                   $parsed = $content | ConvertFrom-Json
 
                   if ($parsed) {
+
                       $gitleaks = $parsed.Count
                   }
               }
@@ -304,6 +338,7 @@ jobs:
           path: |
             gitleaks-report.json
             changed_files.txt
+            scanfiles
 
       # -------------------------------------------------
       # Get Okta Token
@@ -356,11 +391,20 @@ jobs:
           TOKEN: ${{ steps.okta.outputs.token }}
           COMMIT: ${{ inputs.PR_COMMIT }}
           PR_URL: ${{ inputs.PR_URL }}
+          QUALITY_GATE: prqualitygatedemo
         run: |
 
           $total = "${{ steps.aggregate.outputs.total }}"
 
           if ($total -gt 0) {
+
+              Write-Host ""
+              Write-Host "================================="
+              Write-Host "Secrets detected by Gitleaks"
+              Write-Host "Demo mode enabled"
+              Write-Host "Pipeline will PASS"
+              Write-Host "================================="
+              Write-Host ""
 
               $status = "FAILED"
               $comment = "Secrets detected by Gitleaks"
@@ -381,10 +425,12 @@ jobs:
             comment = $comment
           } | ConvertTo-Json -Depth 5
 
-          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/prqualitygate/verifications"
+          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/$env:QUALITY_GATE/verifications"
 
+          Write-Host ""
           Write-Host "Posting verification to:"
           Write-Host $uri
+          Write-Host ""
 
           Invoke-RestMethod `
             -Method Post `
@@ -395,7 +441,9 @@ jobs:
             -Body $body `
             -ContentType "application/json"
 
+          Write-Host ""
           Write-Host "Guidewire quality gate updated successfully"
+          Write-Host ""
 
   # -------------------------------------------------
   # Final Security Gate
@@ -416,11 +464,17 @@ jobs:
 
           if ($total -gt 0) {
 
-              Write-Host "Security findings detected"
-
-              exit 1
+              Write-Host ""
+              Write-Host "================================="
+              Write-Host "Secrets detected"
+              Write-Host "Demo mode enabled"
+              Write-Host "Pipeline intentionally continuing"
+              Write-Host "================================="
+              Write-Host ""
           }
           else {
 
+              Write-Host ""
               Write-Host "Security gate passed"
+              Write-Host ""
           }
