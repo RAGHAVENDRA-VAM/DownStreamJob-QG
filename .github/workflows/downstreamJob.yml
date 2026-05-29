@@ -196,10 +196,9 @@ jobs:
               }
 
               # IMPORTANT FIX
-              # Do NOT URL encode full path
-              # Bitbucket raw API expects normal path
+              # Use ${f} so PowerShell does not break variable parsing
 
-              $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo/raw/$f?at=$commit"
+              $fileUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo/raw/${f}?at=$commit"
 
               Write-Host ""
               Write-Host "Downloading:"
