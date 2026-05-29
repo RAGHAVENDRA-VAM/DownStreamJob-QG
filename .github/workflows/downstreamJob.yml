@@ -96,32 +96,16 @@ jobs:
 
           $repoUrl = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo"
 
-          Write-Host ""
           Write-Host "Validating Bitbucket repository..."
           Write-Host $repoUrl
-          Write-Host ""
 
-          try {
+          Invoke-RestMethod `
+            -Uri $repoUrl `
+            -Headers $headers `
+            -Method Get `
+            -ErrorAction Stop
 
-              $repoResp = Invoke-RestMethod `
-                -Uri $repoUrl `
-                -Headers $headers `
-                -Method Get `
-                -ErrorAction Stop
-
-              Write-Host "Repository Found"
-              Write-Host "Name : $($repoResp.name)"
-              Write-Host "Slug : $($repoResp.slug)"
-          }
-          catch {
-
-              Write-Host ""
-              Write-Host "Repository validation failed"
-              Write-Host $_.Exception.Message
-              Write-Host ""
-
-              throw
-          }
+          Write-Host "Repository validation successful"
 
       # -------------------------------------------------
       # Get Changed Files
@@ -133,7 +117,7 @@ jobs:
           TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
         run: |
 
-          $repo   = "${{ inputs.PR_REPOSITORY }}"
+          $repo = "${{ inputs.PR_REPOSITORY }}"
           $commit = "${{ inputs.PR_COMMIT }}"
           $project = "$env:BITBUCKET_PROJECT"
 
@@ -143,28 +127,14 @@ jobs:
 
           $url = "https://$env:HOST/rest/api/latest/projects/$project/repos/$repo/commits/$commit/changes?limit=5000"
 
-          Write-Host ""
           Write-Host "Calling Bitbucket API"
           Write-Host $url
-          Write-Host ""
 
-          try {
-
-              $resp = Invoke-RestMethod `
-                -Uri $url `
-                -Headers $headers `
-                -Method Get `
-                -ErrorAction Stop
-          }
-          catch {
-
-              Write-Host ""
-              Write-Host "Bitbucket API failed"
-              Write-Host $_.Exception.Message
-              Write-Host ""
-
-              throw
-          }
+          $resp = Invoke-RestMethod `
+            -Uri $url `
+            -Headers $headers `
+            -Method Get `
+            -ErrorAction Stop
 
           New-Item `
             -ItemType Directory `
@@ -176,7 +146,6 @@ jobs:
           foreach ($v in $resp.values) {
 
               if ($v.path.toString) {
-
                   $files += $v.path.toString
               }
           }
@@ -184,7 +153,7 @@ jobs:
           $files | Out-File changed_files.txt -Encoding utf8
 
           Write-Host ""
-          Write-Host "Changed files:"
+          Write-Host "Changed Files"
           Write-Host "===================="
 
           $files
@@ -199,18 +168,12 @@ jobs:
           TOKEN: ${{ secrets.GW_BITBUCKET_TOKEN }}
         run: |
 
-          $repo   = "${{ inputs.PR_REPOSITORY }}"
+          $repo = "${{ inputs.PR_REPOSITORY }}"
           $commit = "${{ inputs.PR_COMMIT }}"
           $project = "$env:BITBUCKET_PROJECT"
 
           $headers = @{
             Authorization = "Bearer $env:TOKEN"
-          }
-
-          if (-not (Test-Path changed_files.txt)) {
-
-              Write-Host "No changed_files.txt found"
-              exit 0
           }
 
           $files = Get-Content changed_files.txt
@@ -241,7 +204,7 @@ jobs:
                     -OutFile $dest `
                     -ErrorAction Stop
 
-                  Write-Host "Downloaded $f"
+                  Write-Host "Downloaded: $f"
               }
               catch {
 
@@ -294,6 +257,8 @@ jobs:
               "[]" | Out-File gitleaks-report.json -Encoding utf8
           }
 
+          Write-Host "Gitleaks scan completed"
+
       # -------------------------------------------------
       # Aggregate Findings
       # -------------------------------------------------
@@ -306,23 +271,27 @@ jobs:
 
           if (Test-Path gitleaks-report.json) {
 
-              $gitleaks = (
-                Get-Content gitleaks-report.json | ConvertFrom-Json
-              ).Count
-          }
+              $content = Get-Content gitleaks-report.json -Raw
 
-          $total = $gitleaks
+              if ($content.Trim() -ne "") {
+
+                  $parsed = $content | ConvertFrom-Json
+
+                  if ($parsed) {
+                      $gitleaks = $parsed.Count
+                  }
+              }
+          }
 
           Write-Host ""
           Write-Host "================================="
           Write-Host "Security Scan Summary"
           Write-Host "================================="
           Write-Host "Gitleaks Findings : $gitleaks"
-          Write-Host "Total Findings    : $total"
           Write-Host "================================="
           Write-Host ""
 
-          "total=$total" >> $env:GITHUB_OUTPUT
+          "total=$gitleaks" >> $env:GITHUB_OUTPUT
 
       # -------------------------------------------------
       # Upload Reports
@@ -358,46 +327,17 @@ jobs:
 
           $headers = @{
               Authorization = "Basic $base64"
-              Accept        = "application/json"
-              "Content-Type"= "application/x-www-form-urlencoded"
+              Accept = "application/json"
+              "Content-Type" = "application/x-www-form-urlencoded"
           }
 
           $body = "grant_type=client_credentials&scope=cicd.qualitygates.read cicd.qualitygates.write tenant.valuemom project.gwcp planet_class.lower"
 
-          try {
-
-              $resp = Invoke-RestMethod `
-                -Method Post `
-                -Uri $env:OKTA_URL `
-                -Headers $headers `
-                -Body $body `
-                -ErrorAction Stop
-          }
-          catch {
-
-              Write-Host "Okta request failed"
-
-              if ($_.Exception.Response -ne $null) {
-
-                  $reader = New-Object System.IO.StreamReader(
-                    $_.Exception.Response.GetResponseStream()
-                  )
-
-                  $reader.BaseStream.Position = 0
-                  $reader.DiscardBufferedData()
-
-                  Write-Host ($reader.ReadToEnd())
-              }
-
-              throw "Okta authentication failed"
-          }
-
-          if (-not $resp.access_token) {
-
-              $resp | ConvertTo-Json -Depth 5
-
-              throw "Okta returned no access_token"
-          }
+          $resp = Invoke-RestMethod `
+            -Method Post `
+            -Uri $env:OKTA_URL `
+            -Headers $headers `
+            -Body $body
 
           Write-Host "Okta token acquired"
 
@@ -428,7 +368,7 @@ jobs:
           else {
 
               $status = "SUCCESSFUL"
-              $comment = "Security scans passed"
+              $comment = "No secrets detected"
           }
 
           $body = @{
@@ -446,37 +386,16 @@ jobs:
           Write-Host "Posting verification to:"
           Write-Host $uri
 
-          try {
+          Invoke-RestMethod `
+            -Method Post `
+            -Uri $uri `
+            -Headers @{
+              Authorization = "Bearer $env:TOKEN"
+            } `
+            -Body $body `
+            -ContentType "application/json"
 
-              Invoke-RestMethod `
-                -Method Post `
-                -Uri $uri `
-                -Headers @{
-                  Authorization = "Bearer $env:TOKEN"
-                } `
-                -Body $body `
-                -ContentType "application/json"
-
-              Write-Host "Guidewire gate updated successfully"
-          }
-          catch {
-
-              Write-Host "Guidewire API error:"
-
-              if ($_.Exception.Response -ne $null) {
-
-                  $reader = New-Object System.IO.StreamReader(
-                    $_.Exception.Response.GetResponseStream()
-                  )
-
-                  $reader.BaseStream.Position = 0
-                  $reader.DiscardBufferedData()
-
-                  Write-Host ($reader.ReadToEnd())
-              }
-
-              throw
-          }
+          Write-Host "Guidewire quality gate updated successfully"
 
   # -------------------------------------------------
   # Final Security Gate
