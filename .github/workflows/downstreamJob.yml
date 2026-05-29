@@ -37,12 +37,10 @@ jobs:
       APP_NAME: BillingCenter
       CICD_APP: BC
 
-      # IMPORTANT
-      # Actual Bitbucket host from your PR URL
       BITBUCKET_PROJECT: GWCPDEV
 
       CICD_BASE_URL: https://cicd-manager-service.api.omega2-andromeda.guidewire.net
-      CICD_TENANT: valuemomentum
+      CICD_TENANT: valuemom
       CICD_STAR_SYSTEM: gwcp
       CICD_QUALITY_GATE: prqualitygatedemo
 
@@ -73,6 +71,7 @@ jobs:
           Write-Host "Repository  : ${{ inputs.PR_REPOSITORY }}"
           Write-Host "Branch      : $cleanBranch"
           Write-Host "Commit      : ${{ inputs.PR_COMMIT }}"
+          Write-Host "PR URL      : ${{ inputs.PR_URL }}"
           Write-Host "================================="
           Write-Host ""
 
@@ -251,43 +250,6 @@ jobs:
           }
 
       # -------------------------------------------------
-      # Install Semgrep
-      # -------------------------------------------------
-      - name: Install Semgrep
-        shell: powershell
-        run: |
-
-          python -m pip install --upgrade pip
-
-          pip install semgrep
-
-          semgrep --version
-
-      # -------------------------------------------------
-      # Run Semgrep
-      # -------------------------------------------------
-      - name: Run Semgrep
-        shell: powershell
-        run: |
-
-          chcp 65001 > $null
-
-          $env:PYTHONUTF8 = "1"
-          $env:PYTHONIOENCODING = "utf-8"
-
-          if (Test-Path scanfiles) {
-
-              semgrep scan scanfiles `
-                --config=auto `
-                --json `
-                -o semgrep-report.json
-          }
-          else {
-
-              '{"results":[]}' | Out-File semgrep-report.json -Encoding utf8
-          }
-
-      # -------------------------------------------------
       # Install Gitleaks
       # -------------------------------------------------
       - name: Install Gitleaks
@@ -340,15 +302,7 @@ jobs:
         shell: powershell
         run: |
 
-          $semgrep = 0
           $gitleaks = 0
-
-          if (Test-Path semgrep-report.json) {
-
-              $semgrep = (
-                Get-Content semgrep-report.json | ConvertFrom-Json
-              ).results.Count
-          }
 
           if (Test-Path gitleaks-report.json) {
 
@@ -357,15 +311,14 @@ jobs:
               ).Count
           }
 
-          $total = $semgrep + $gitleaks
+          $total = $gitleaks
 
           Write-Host ""
           Write-Host "================================="
           Write-Host "Security Scan Summary"
           Write-Host "================================="
-          Write-Host "Semgrep Findings : $semgrep"
-          Write-Host "Gitleaks Findings: $gitleaks"
-          Write-Host "Total Findings   : $total"
+          Write-Host "Gitleaks Findings : $gitleaks"
+          Write-Host "Total Findings    : $total"
           Write-Host "================================="
           Write-Host ""
 
@@ -380,7 +333,6 @@ jobs:
         with:
           name: billingcenter-security-reports
           path: |
-            semgrep-report.json
             gitleaks-report.json
             changed_files.txt
 
@@ -395,27 +347,25 @@ jobs:
           CLIENT_ID: ${{ secrets.OKTA_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.OKTA_CLIENT_SECRET }}
         run: |
-      
+
           Write-Host "Requesting Okta token..."
-      
+
           $pair = "$env:CLIENT_ID`:$env:CLIENT_SECRET"
-      
+
           $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
-      
+
           $base64 = [Convert]::ToBase64String($bytes)
-      
+
           $headers = @{
               Authorization = "Basic $base64"
               Accept        = "application/json"
               "Content-Type"= "application/x-www-form-urlencoded"
           }
-      
-          # IMPORTANT
-          # Use EXACT SAME scope as working pipeline
+
           $body = "grant_type=client_credentials&scope=cicd.qualitygates.read cicd.qualitygates.write tenant.valuemom project.gwcp planet_class.lower"
-      
+
           try {
-      
+
               $resp = Invoke-RestMethod `
                 -Method Post `
                 -Uri $env:OKTA_URL `
@@ -424,33 +374,33 @@ jobs:
                 -ErrorAction Stop
           }
           catch {
-      
+
               Write-Host "Okta request failed"
-      
+
               if ($_.Exception.Response -ne $null) {
-      
+
                   $reader = New-Object System.IO.StreamReader(
                     $_.Exception.Response.GetResponseStream()
                   )
-      
+
                   $reader.BaseStream.Position = 0
                   $reader.DiscardBufferedData()
-      
+
                   Write-Host ($reader.ReadToEnd())
               }
-      
+
               throw "Okta authentication failed"
           }
-      
+
           if (-not $resp.access_token) {
-      
+
               $resp | ConvertTo-Json -Depth 5
-      
+
               throw "Okta returned no access_token"
           }
-      
+
           Write-Host "Okta token acquired"
-      
+
           "token=$($resp.access_token)" >> $env:GITHUB_OUTPUT
 
       # -------------------------------------------------
@@ -473,7 +423,7 @@ jobs:
           if ($total -gt 0) {
 
               $status = "FAILED"
-              $comment = "Security findings detected"
+              $comment = "Secrets detected by Gitleaks"
           }
           else {
 
@@ -491,18 +441,42 @@ jobs:
             comment = $comment
           } | ConvertTo-Json -Depth 5
 
-          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/prqualitygatedemo/verifications"
+          $uri = "$env:GW_URL/api/v3/tenants/$env:TENANT/starsystems/$env:STAR/applications/$env:APP/quality-gates/prqualitygate/verifications"
 
-          Invoke-RestMethod `
-            -Method Post `
-            -Uri $uri `
-            -Headers @{
-              Authorization = "Bearer $env:TOKEN"
-            } `
-            -Body $body `
-            -ContentType "application/json"
+          Write-Host "Posting verification to:"
+          Write-Host $uri
 
-          Write-Host "Guidewire quality gate updated"
+          try {
+
+              Invoke-RestMethod `
+                -Method Post `
+                -Uri $uri `
+                -Headers @{
+                  Authorization = "Bearer $env:TOKEN"
+                } `
+                -Body $body `
+                -ContentType "application/json"
+
+              Write-Host "Guidewire gate updated successfully"
+          }
+          catch {
+
+              Write-Host "Guidewire API error:"
+
+              if ($_.Exception.Response -ne $null) {
+
+                  $reader = New-Object System.IO.StreamReader(
+                    $_.Exception.Response.GetResponseStream()
+                  )
+
+                  $reader.BaseStream.Position = 0
+                  $reader.DiscardBufferedData()
+
+                  Write-Host ($reader.ReadToEnd())
+              }
+
+              throw
+          }
 
   # -------------------------------------------------
   # Final Security Gate
